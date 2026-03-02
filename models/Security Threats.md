@@ -1,8 +1,18 @@
-# HDF5 Security Threat (Attack) Model — CASSE-based
+# HDF5 Security Threat (Attack) Model
 
 This document defines a *security* threat model for the HDF5 ecosystem using the **CASSE** approach (“Core library, Application, Storage, System, External libraries”). CASSE was introduced specifically for data management libraries (DMLs).
 
-**Reference:** https://dl.acm.org/doi/full/10.1145/3731599.3767556
+**Reference:** [https://dl.acm.org/doi/full/10.1145/3731599.3767556](https://dl.acm.org/doi/full/10.1145/3731599.3767556)
+
+## Contents
+
+- [1) Scope and security goals](#1-scope-and-security-goals)
+- [2) CASSE in one page](#2-casse-in-one-page)
+- [3) Threat enumeration workflow (CASSE)](#3-threat-enumeration-workflow-casse)
+- [4) Practical examples (CASSE style)](#4-practical-examples-casse-style)
+- [5) Artifacts to keep in the repository](#5-artifacts-to-keep-in-the-repository)
+- [6) Threat taxonomy aligned with HDF5 SSP SIG vulnerability categories](#6-threat-taxonomy-aligned-with-hdf5-ssp-sig-vulnerability-categories)
+- [7) Guidance for reviewers](#7-guidance-for-reviewers)
 
 ## 1) Scope and security goals
 
@@ -117,7 +127,7 @@ Threat modeling is only “done” when you create:
 - Likely categories: **FMT**, **LIB**
 - Typical outcomes: crash, memory corruption, possible code execution
 
-**Mitigations**
+**Mitigations**:
 
 - bounds checks and sanity limits for counts/offsets
 - fuzzing (including checksum/integrity-aware fuzzing where relevant)
@@ -132,7 +142,7 @@ Threat modeling is only “done” when you create:
 - Target: External libraries (plugins)
 - Likely categories: **EXT**, **SCD**, sometimes **OPS** (misconfiguration)
 
-**Mitigations**
+**Mitigations**:
 
 - policy-driven plugin loading (allowlist, version constraints)
 - signature verification for plugins
@@ -147,7 +157,7 @@ Threat modeling is only “done” when you create:
 - Target: Storage
 - Likely categories: **OPS** (and possibly **FMT** if layout metadata is abused)
 
-**Mitigations**
+**Mitigations**:
 
 - enforce minimum chunk sizes / I/O rate limits in pipelines
 - preflight scanning of chunk layouts before “full ingest”
@@ -162,7 +172,7 @@ Threat modeling is only “done” when you create:
 - Target: System
 - Likely categories: **SCD**, **TCD**
 
-**Mitigations**
+**Mitigations**:
 
 - signed artifacts, verified provenance, reproducible builds
 - SBOMs + dependency pinning
@@ -216,7 +226,7 @@ Use this table to tag each threat (many threats span multiple categories):
 | **SCD** (Supply chain/dist.) | unsigned artifacts, typosquatting, compromised repos, provenance gaps | System, Application |
 | **UNK** (Unknown) | novel vulnerability classes, cross-layer chains | Any |
 
-## 7) “Tight” guidance for reviewers
+## 7) Guidance for reviewers
 
 ### When a change touches parsing or on-disk structures
 
