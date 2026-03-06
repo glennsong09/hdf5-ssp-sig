@@ -1,4 +1,4 @@
-# HDF5 Safety Threat (Hazard) Model
+# HDF5 Safety Hazard Model
 
 This document defines a practical hazard model for HDF5. It is meant to expose accident chains, turn them into concrete constraints and tests, and keep safety work aligned with the HDF5 SSP SIG vulnerability taxonomy used across the repository.
 

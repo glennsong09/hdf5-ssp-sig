@@ -1,4 +1,4 @@
-# HDF5 Security Threat (Attack) Model
+# HDF5 Security Threat Model
 
 This document defines a *security* threat model for the HDF5 ecosystem using the **CASSE** approach (“Core library, Application, Storage, System, External libraries”). CASSE was introduced specifically for data management libraries (DML).
 
