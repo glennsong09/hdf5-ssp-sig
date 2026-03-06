@@ -1,668 +1,311 @@
 # HDF5 Safety Threat (Hazard) Model
 
-The purpose of this model is to:
-
-- **Systematically expose accident chains** (trigger → unsafe state → loss) across subsystems and threat sources.
-- Drive actionable mitigations (prevention, detection, recovery, containment) and test cases.
-- Align with SSP vulnerability categories to connect safety and security efforts.
-- Provide practical guidance for reviewers to identify safety hazards in code changes and design.
-- Maintain a living hazard register that tracks known hazards, mitigations, and verification status.
+This document defines a practical hazard model for HDF5. It is meant to expose accident chains, turn them into concrete constraints and tests, and keep safety work aligned with the HDF5 SSP SIG vulnerability taxonomy used across the repository.
 
 ## Contents
 
-- [1) Scope and safety goals](#1-scope-and-safety-goals)
-- [2) Typical accident chain (the backbone)](#2-typical-accident-chain-the-backbone)
-- [3) Practical Systems-Theoretic Process Analysis (STPA)-style taxonomy](#3-practical-systems-theoretic-process-analysis-stpa-style-taxonomy)
-- [4) Threat taxonomy aligned with HDF5 SSP vulnerability categories](#4-threat-taxonomy-aligned-with-hdf5-ssp-vulnerability-categories)
-- [5) How to use this model in practice (artifacts + workflow)](#5-how-to-use-this-model-in-practice-artifacts--workflow)
-- [6) Compact safety‑threat taxonomy tuned to HDF5 accidents](#6-compact-safetythreat-taxonomy-tuned-to-hdf5-accidents)
-- [7) Checklists (practical, subsystem-applicable)](#7-checklists-practical-subsystem-applicable)
+- [1) Scope and security goals](#1-scope-and-security-goals)
+- [2) HDF5 Control System (H5CS) model in one page](#2-hdf5-control-system-model-in-one-page)
+- [3) Hazard enumeration workflow](#3-hazard-enumeration-workflow)
+- [4) Practical examples](#4-practical-examples)
+- [5) Hazard register template](#5-hazard-register-template)
+- [6) Hazard taxonomy aligned with HDF5 SSP SIG vulnerability categories](#6-hazard-taxonomy-aligned-with-hdf5-ssp-sig-vulnerability-categories)
+- [7) Checklists for reviewers](#7-checklists-for-reviewers)
 
-## 1) Scope and safety goals
+## 1) Scope and security goals
+
+The requested outline uses "security goals." In this safety model, that means the safety and security-relevant properties that keep HDF5 files, tools, and workflows out of unsafe states.
 
 ### In scope
 
-This model describes **how “HDF5 accidents” happen**, i.e., how non‑malicious (and sometimes malicious) triggers create **unsafe states** that lead to **losses** such as:
+- open HDF5 files, where truth is split across disk, memory, and in-flight buffers
+- read paths and parse paths for malformed, partial, or stale files
+- core library subsystems such as metadata cache, chunk cache, free-space manager, object header handling, B-tree and heap handling
+- extension points such as VOL connectors, VFDs, filters, wrappers, and plugins
+- operational realities: crashes, power loss, concurrent access, weak durability assumptions, misconfiguration, and unsafe deployment defaults
 
-- data loss, corruption, silent wrong results
-- file integrity loss (won’t open / opens incorrectly)
-- privacy leakage via metadata, logs, artifacts
-- cascading failures (one corrupted file poisons downstream pipelines)
+### Out of scope
 
-It is **centered on the safety‑critical reality of an open HDF5 file:**
+- proving full correctness of the library
+- assuming transactional semantics or a write-ahead log exists today
+- prescribing a single mitigation strategy such as journaling, copy-on-write, or checksums
 
-> An open HDF5 file is a **hybrid state**: some truth lives on disk, some in memory (metadata cache, chunk cache, free‑space manager), and some in-flight (VFD buffering, OS page cache, filesystem ordering).
+### Working assumptions
 
-Closed and read-only HDF5 are not immune from safety hazards, but this model is focused on open HDF5 files (that can be modified).
+1. Crashes happen: process abort, `SIGKILL`, node reboot, power loss, kernel panic, out-of-memory kill.
+2. Write ordering is not guaranteed unless a specific layer explicitly provides it.
+3. API success does not automatically mean durable-on-disk success.
+4. Extensions run inside the process boundary unless explicitly isolated.
+5. Parallel I/O, threads, and distributed workflows increase timing and ordering hazards.
 
-### Assumptions
+### Primary goals
 
-1. **Crashes happen**: process crash, `kill -9`, node reboot, power loss, out-of-memory (OOM) kill, abort due to assertion, segfault.
-2. **Write ordering is not guaranteed** unless explicitly forced: OS + filesystem + storage can reorder and delay persistence.
-3. **HDF5 uses caching and delayed writes** for performance, so “API returned success” does not automatically imply “durable on disk now” unless the API/documentation says so and the VFD/FS semantics cooperate.
-4. **Extensions exist** (filters, VOL connectors, VFDs, plugins) and can execute code inside the process boundary.
-5. Many real deployments include **parallel I/O, threads, or distributed workflows**, which increases timing/order and other hazards.
+- **File integrity:** the file remains parseable and internally consistent at defined safe points.
+- **Data correctness:** reads return the data that was actually committed, or a clearly documented durable prefix.
+- **Durability truthfulness:** `flush`, `close`, and similar signals must not overstate what is safely persisted.
+- **Availability:** files and tools should fail safe, remain recoverable where possible, and avoid cascading breakage.
+- **In-memory safety:** internal structures should not drift into states that cause wrong writes, wrong frees, or silent corruption.
+- **Privacy protection:** metadata, logs, temporary artifacts, and extension behavior should not leak sensitive information.
 
-### Primary safety goals (what we protect)
+## 2) HDF5 Control System (H5CS) model in one page
 
-Think “assets + safety properties.”
-
-#### Assets
-
-- **File integrity**: HDF5 file remains parseable, consistent, and faithful to the format.
-- **Data correctness**: reads return the data that was written (or the documented last-durable prefix).
-- **Durability semantics**: what the user expects after `flush`/`close` is true on disk.
-- **Availability**: file remains usable; recovery is possible; tooling doesn’t crash on open.
-- **In-memory safety**: internal structures remain consistent; failures fail safe.
-- **Privacy**: metadata and data are not leaked through side channels or artifacts.
-
-#### Safety properties
-
-- **Consistency**: on-disk metadata is internally consistent at defined safe points.
-- **Ordering**: control actions that imply durability occur in a safe order.
-- **Isolation**: extensions cannot violate core invariants silently.
-- **Fail-safe behavior**: when invariants are violated, prefer *stop writing / refuse to proceed* over “continue and corrupt.”
-
-#### Non‑goals
-
-- This is **not** a security threat model; it’s a **safety accident model** that can incorporate security/privacy threats when they create safety losses.
-- This model does **not** assume the presence of a **write‑ahead log** (WAL) or transactional semantics in HDF5 today. (See [RFC: Write-Ahead Log](https://github.com/HDFGroup/hdf5doc/blob/master/RFCs/HDF5_Library/WriteAheadLog/RFC_WriteAheadLog.pdf).)
-- This model does **not** prescribe a single solution (WAL, checksums, copy‑on‑write, journaling, etc.). It is meant to **systematically expose accident chains** and drive requirements/tests.
-- This model does **not** attempt to prove correctness; it’s designed to produce **actionable artifacts** (hazard register, unsafe control action (UCA) list, constraints, tests).
-
-## 2) Typical accident chain (the backbone)
-
-We model an open HDF5 file as a distributed state machine spanning
-
-- Disk-resident state
-- In-memory state
-- In-flight / semi-durable state
-
-A typical **accident chain** looks like this:
-
-> **Trigger → Unsafe State → Loss**
-
-### Trigger (examples)
-
-#### A) Unintentional / environmental
-
-- application bugs (bad call ordering, misuse of flush/close semantics)
-- malformed/unexpected input file (non-malicious)
-- concurrency hazards (threads, MPI, async I/O)
-- resource exhaustion (disk full, memory pressure, file descriptor exhaustion)
-- platform faults (power loss, reboot, kernel panic, filesystem bugs)
-- storage behavior surprises (reordering, partial writes, weak flush semantics)
-- operational misuse (wrong sharing mode, wrong permissions, wrong lifecycle)
-
-#### B) Implementation defects (library + extensions)
-
-- memory safety bugs (OOB/UAF/double free), integer overflow, undefined behavior (UB)
-- missing input validation; inconsistent error handling
-- logic bugs in free-space manager, cache eviction, address computations
-- inadequate invariant checking prior to emitting durable bytes
-- unsafe extension code executes in-process
-
-#### C) Adversarial / malicious (relevant because HDF5 is a supply-chain “carrier”)
-
-- malformed HDF5 files crafted to crash or corrupt tools (parsers)
-- plugin/filter/VOL hijacking (load attacker-controlled code)
-- trojanized binaries, compromised dependencies
-- data poisoning: maliciously modified HDF5 content for downstream ML/pipelines
-
-### Unsafe state (what makes the trigger harmful)
-
-- on‑disk metadata becomes **inconsistent**
-- in‑memory state diverges from on‑disk state with **no safe reconciliation**
-- free‑space reuse or aliasing makes recovery/continuation **overwrite valid data**
-- cache bookkeeping is corrupted (stale pointers, wrong sizes/addresses)
-- extension boundary breaks invariants (writes unexpected bytes/offsets)
-- sensitive metadata/artifacts become exposed
-
-### Loss (what we care about)
-
-- file won’t open; file opens but some contents are wrong
-- silent data corruption (hardest class)
-- lost updates (acknowledged but not durable)
-- raw data overwritten due to metadata confusion
-- privacy leak via metadata/logs/artifacts
-- cascading failures in downstream tools/pipelines
-
-This chain is intentionally generic so it can be applied to **each subsystem** (MDC, chunk cache, free space manager, B-tree/heap code, VFD, VOL, filters, etc.).
-
-## 3) Practical Systems-Theoretic Process Analysis (STPA)-style taxonomy
-
-[STPA-style analysis](https://www.ul.com/sis/blog/introduction-to-stamp-stpa-and-cast) is powerful here because HDF5 is a **control system**: controllers (application/library/subsystems) issue control actions (write/flush/free/evict/load plugin), and *unsafe actions under certain contexts produce hazards.*
-
-### 3.1 Controllers and controlled processes (reference structure)
+An open HDF5 file behaves like a control system. Controllers issue actions that change a hybrid state spread across disk, memory, and in-flight I/O. Hazards arise when those actions happen in the wrong context, in the wrong order, or without enough validation.
 
 ```mermaid
 flowchart LR
-  C["Controller <br/> (app, pipeline, operator)"] -->|control actions| A["Actuators <br/> (HDF5 API calls, config, <br/> plugins, conversions)"]
-  A --> P["Controlled process <br/> (decision / physical system)"]
-  P -->|feedback| F["Feedback <br/> (validation, monitoring, <br/> provenance, tests)"]
+  C["Controllers<br/>(application, operator,<br/>workflow, HDF5 subsystems)"]
+  A["Control actions<br/>(write, flush, close,<br/>evict, free, parse,<br/> load plugin)"]
+  P["Controlled state<br/>(disk state, in-memory <br/> state, in-flight buffers,<br/> artifacts)"]
+  F["Feedback<br/>(return codes, error stack,<br/>dirty flags, validation,<br/>telemetry)"]
+
+  C --> A
+  A --> P
+  P --> F
   F --> C
 ```
 
-#### Controllers
+### What matters in practice
 
-- Application code (user)
-- HDF5 API layer (`H5F`/`H5D`/`H5G`…)
-- Subsystems: metadata cache, free-space manager, chunk cache, object header/heap/B-tree managers
-- Extension mechanisms: filters, VOL connectors, VFDs
-- OS/filesystem/storage stack (implicit controller of persistence)
+- **Controllers:** application code, HDF5 API layers, metadata cache, free-space manager, chunk cache, plugin loaders, and parts of the OS or filesystem stack that influence persistence.
+- **Control actions:** emit durable bytes, mark dirty or clean, evict entries, reuse free space, parse structures, load extensions, and signal durability.
+- **Controlled state:** on-disk metadata and raw data, in-memory caches and indices, in-flight writes, temporary files, logs, and plugin search paths.
+- **Feedback:** return codes, error stacks, file locking outcomes, validation results, checksums, reopen behavior, and monitoring signals.
 
-#### Controlled "processes"
+### The core safety idea
 
-- On-disk HDF5 state (metadata + raw data)
-- In-memory state (caches, indices, bookkeeping)
-- In-flight state (buffers, OS page cache, outstanding I/O)
-- Artifacts (temp files, logs, plugin search paths)
+For HDF5, the unsafe condition is usually not a single event. It is a state mismatch such as:
 
-#### Feedback
+- durable metadata points at bytes that are not yet durable
+- memory and disk disagree with no safe reconciliation path
+- free space is reused while stale references can still become reachable
+- an extension produces output that violates core invariants
 
-- return codes; error stack
-- internal flags (dirty/clean, eviction pressure)
-- “flush completed” signals (best-effort, depends on stack)
-- file locking/sharing outcomes
-- checksum/validation tool results (if any)
+That is why the hazard unit in this model is:
 
-### 3.2 Hazard taxonomy (unsafe states)
+> **Trigger -> Unsafe state -> Loss**
 
-A good hazard taxonomy is:
+## 3) Hazard enumeration workflow
 
-- **state-based** (describes unsafe condition)
-- **subsystem-agnostic** (can apply anywhere)
-- **mappable to SSP vulnerability categories** (later section)
+Use this workflow for each subsystem, feature, or design change.
 
-| ID | Name | Description |
-| -- | ---- | ----------- |
-| H0 | Safety baseline: open-file hybrid state can diverge | This is not a hazard itself; it’s the underlying reality. |
-| H1 | On-disk metadata inconsistency | The file’s durable metadata is not self-consistent (internal pointers, sizes, checks, graphs). |
-| H2 | Hybrid divergence without a safe reconciliation path | In-memory state and on-disk state disagree and the system lacks a reliable method to converge without loss/corruption. |
-| H3 | Unsafe ordering of durability-signaling actions | Operations imply durability (`flush`/`close` success), but the system allowed reorder/partial persistence that violates the implied contract. |
-| H4 | Free-space aliasing / reuse hazard | Freed regions are reused while older references can still come back (via partial updates, later repair, or tool behaviors), leading to overwrites. |
-| H5 | In-memory structural corruption hazard | Internal structures (cache entries, indices, lists, address maps) become corrupt, causing wrong writes, wrong reads, or unsafe frees. |
-| H6 | Parser ambiguity hazard | Ambiguity or underspecified format interpretation leads to multiple valid parses or inconsistent behavior across versions/tools. |
-| H7 | Extension boundary violation hazard | Extensions (filters/VOL/VFD/plugins) violate core invariants (write outside bounds, inconsistent metadata, unsafe callbacks), compromising safety. |
-| H8 | Operational exposure hazard | Misconfiguration of sharing, permissions, logging, deployment, or lifecycle exposes files to unintended modification or leaks. |
-| H9 | Privacy leakage hazard | Metadata, attributes, names, provenance-like structure, or embedded metadata-as-data leaks sensitive information. |
-| H10 | Supply-chain artifact hazard | Unsigned/unverified builds, compromised dependencies, plugin search path hijacking introduce unsafe code/data paths. |
-| H11 | Unknown/latent hazard | A placeholder category for discovered-in-audit hazards. |
+### Step 0 - Set boundaries and assumptions
 
-### 3.3 Unsafe Control Actions (UCA) taxonomy (STPA-style)
+Document:
 
-STPA UCAs fall into 4 classic types. Here’s a **practical mapping** for HDF5:
+- what state the subsystem owns on disk, in memory, and in flight
+- what inputs are untrusted or only partially trusted
+- what durability or concurrency guarantees users think they have
+- what operating environments matter: local FS, HPC FS, object store, plugin-rich workflow, cloud service
 
-#### UCA Types (generic)
+### Step 1 - Build the control model
 
-1. **Not providing** a control action when needed
-2. **Providing** a control action when not appropriate
-3. **Wrong timing/order**
-4. **Applied too long/too short** (stopped too soon, repeated too long)
+List:
 
-#### Control actions to analyze (for each subsystem)
+- controllers
+- control actions
+- controlled state
+- feedback channels
+- trust or coordination boundaries
 
-Use these as your standard UCA checklist:
+For HDF5, the minimum set is usually: application, HDF5 subsystem, extension boundary, OS/filesystem, and storage.
 
-##### A. Emit durable bytes
+### Step 2 - Enumerate unsafe states
 
-- write metadata block
-- write raw data block
-- update free-space structures
+Describe hazards as state conditions, not events. Good hazard statements look like:
 
-##### B. Signal durability
+- on-disk metadata is internally inconsistent
+- in-memory state diverges from disk without a safe replay or repair path
+- durability-signaling actions can complete before required bytes are actually safe
+- sensitive metadata can escape through logs or artifacts
 
-- `flush` (per-object, per-file)
-- `close` / finalize
-- “commit” semantic (if any higher-level layer claims it)
+### Step 3 - Enumerate unsafe control actions
 
-##### C. Manage in-memory state
+For each control action, ask the four standard STPA-style questions:
 
-- mark dirty/clean
-- evict cache entry
-- reuse free-space segment
-- rebuild indices / lazy load
+1. Was the action not provided when needed?
+2. Was it provided when it was unsafe?
+3. Was it provided in the wrong order or at the wrong time?
+4. Was it applied too long, too short, or only partially?
 
-##### D. Interpret external input
+The control actions worth checking every time are:
 
-- parse superblock/object header/messages
-- handle malformed/edge-case structures
-- accept external metadata/value sizes
+- write metadata or raw data
+- flush or close
+- mark dirty or clean
+- evict or reuse
+- parse a structure
+- load or call an extension
 
-##### E. Execute extension code
+### Step 4 - Derive constraints and mitigations
 
-- load plugin/filter/VOL/VFD
-- call into extension
-- accept extension-produced outputs
+Turn each unsafe control action into a testable constraint:
 
-#### UCA examples
+- "The library shall not report flush success until required metadata ordering constraints are met."
+- "The subsystem shall reject extension outputs that violate address and size invariants."
+- "The parser shall fail closed on malformed offsets or counts."
 
-- **UCA‑A1 (Not provided):** fail to flush critical metadata before returning success on an operation that implies persistence.
-- **UCA‑A2 (Provided when not appropriate):** reuse freed region while any stale reference may still exist (from partial updates or later tool repair).
-- **UCA‑A3 (Wrong order):** update pointer/reference before target block is durable (or vice versa), leaving a dangling durable reference if a crash occurs.
-- **UCA‑A4 (Too short):** partial write accepted without detection; internal state assumes full write.
-- **UCA‑B1:** report “flush/close success” without ensuring required ordering/durability constraints are met.
-- **UCA‑C1:** evict/overwrite an in-memory structure that is still the only consistent source of truth.
-- **UCA‑D1:** accept ambiguous/malformed input that leads to divergent interpretations (tool A opens, tool B corrupts).
-- **UCA‑E1:** load an extension from an untrusted location; or allow extension output to violate invariants without validation.
+Then define prevention, detection, recovery, and containment measures.
 
-## 4) Threat taxonomy aligned with HDF5 SSP vulnerability categories
+### Step 5 - Attach evidence
 
-<table>
-<thead>
-<tr>
-<th>Vulnarability category</th>
-<th>What it looks like</th>
-<th>Typical triggers</th>
-<th>Common hazards</th>
-<th>Common UCAs</th>
-<th>Candidate mitigations</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>(FMT) File Format-Level</td>
-<td>
-<ul>
-<li>malformed file inputs crash tools or trigger unsafe behavior</li>
-<li>ambiguous or weakly validated structures lead to silent wrong results</li>
-<li>lack of integrity verification permits undetected corruption</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>corrupted file from crash, partial copy, network truncation</li>
-<li>adversarially crafted file</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>H1 (on-disk inconsistency)</li>
-<li>H6 (parser ambiguity)</li>
-<li>H2 (divergence)</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>UCA‑D1: parser accepts malformed edge cases</li>
-<li>UCA‑A3: wrong ordering causes durable dangling references</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>stronger validation, format hardening, checksums/integrity fields, canonicalization rules</li>
-<li><b>WAL-style journaling</b> (as a mitigation concept) can reduce crash-induced metadata inconsistency by ensuring replayable safe points (but is not assumed in this model)</li>
-</ul></td></tr><tr>
-<td>(LIB) Library-Level</td>
-<td>
-<ul>
-<li>memory safety bugs, races, UB create wrong writes/reads or crashes</li>
-<li>unsafe defaults cause surprising persistence or sharing behavior</li>
-</ul>
-</td>
-<td>
-</td>
-<td>
-<ul>
-<li>H5 (in-memory corruption)</li>
-<li>H3 (durability signaling hazards)</li>
-<li>H2 (divergence)</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>UCA‑C1: evict/overwrite internal state prematurely</li>
-<li>UCA‑B1: claim durability incorrectly</li>
-<li>UCA‑A4: accept partial write as complete</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>memory safety hardening, fuzzing, sanitizer CI, invariant checking before durable emission, concurrency discipline
-</li></ul></td></tr><tr>
-<td>(EXT) Extension-Level </td>
-<td>
-<ul>
-<li>unsafe execution of unverified plugins</li>
-<li>plugin hijacking or search-path substitution</li>
-<li>extensions violate invariants or create covert channels</li>
-</ul>
-</td>
-<td>
-</td>
-<td>
-<ul>
-<li>H7 (extension boundary violation)</li>
-<li>H10 (supply chain via plugins)</li>
-<li>H9 (privacy leak)</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>UCA‑E1: load extension from untrusted path</li>
-<li>UCA‑E1’: accept extension outputs without validation against invariants</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>signature verification, allowlists/denylist policies, sandboxing/process isolation, strict boundary contracts + validation
-</li></ul></td></tr><tr>
-<td>(TCD) Toolchain and Dependency </td>
-<td>
-<ul>
-<li>vulnerable third-party libraries (compression libs, parsers)</li>
-<li>unpinned builds change semantics across releases</li>
-<li>scripting interface flaws (Python/R/Matlab wrappers)</li>
-</ul>
-</td>
-<td>
-</td>
-<td>
-<ul>
-<li>H10 (artifact hazard)</li>
-<li>H5 (memory corruption via dependency)</li>
-<li>H6 (behavior divergence)</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>UCA‑E1: link/load vulnerable dependency</li>
-<li>UCA‑D1: wrappers accept unsafe inputs or expose unsafe defaults</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>SBOMs, dependency pinning, reproducible builds, vulnerability scanning, policy gating
-</li></ul></td></tr><tr>
-<td>(OPS) Operational and Usage-Level</td>
-<td>
-<ul>
-<li>unsafe sharing modes lead to corruption in multi-writer contexts</li>
-<li>logging leaks, missing access controls, weak permissions</li>
-<li>users misunderstand `flush`/`close` semantics</li>
-</ul>
-</td>
-<td>
-</td>
-<td>
-<ul>
-<li>H8 (operational exposure)</li>
-<li>H3 (durability misunderstandings)</li>
-<li>H2 (divergence)</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>UCA‑B1: operationally claim data is safe when it isn’t (workflow contract mismatch)</li>
-<li>UCA‑A2: concurrent modification without controls</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>clear operational guidance, safe-by-default modes, file locking conventions, audit logging controls
-</li>
-</ul>
-</td>
-</tr>
-</li></ul></td></tr><tr>
-<td>(OPS) Operational and Usage-Level</td>
-<td>
-<ul>
-<li>unsafe sharing modes lead to corruption in multi-writer contexts</li>
-<li>logging leaks, missing access controls, weak permissions</li>
-<li>users misunderstand `flush`/`close` semantics</li>
-</ul>
-</td>
-<td>
-</td>
-<td>
-<ul>
-<li>H8 (operational exposure)</li>
-<li>H3 (durability misunderstandings)</li>
-<li>H2 (divergence)</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>UCA‑B1: operationally claim data is safe when it isn’t (workflow contract mismatch)</li>
-<li>UCA‑A2: concurrent modification without controls</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>clear operational guidance, safe-by-default modes, file locking conventions, audit logging controls
-</li></ul></td></tr><tr>
-<td>(PRV) Privacy-Specific</td>
-<td>
-<ul>
-<li>metadata leakage (names, attributes, structures)</li>
-<li>insufficient anonymization</li>
-<li>traceability across file systems / pipelines</li>
-</ul>
-</td>
-<td>
-</td>
-<td>
-<ul>
-<li>H9 (privacy leakage)</li>
-<li>H8 (operational exposure)</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>UCA‑B? (policy): store sensitive fields in cleartext without user awareness</li>
-<li>UCA‑C? (lifecycle): leave artifacts/logs behind unintentionally</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>privacy threat review for metadata, redaction tooling, attribute policies, encryption-at-rest guidance, controlled logging
-</li></ul></td></tr><tr>
-<td>(SCD) Supply Chain and Distribution</td>
-<td>
-<ul>
-<li>unsigned binaries, trojanized dependencies</li>
-<li>compromised package repositories</li>
-<li>malicious builds distributed to users</li>
-</ul>
-</td>
-<td>
-</td>
-<td>
-<ul>
-<li>H10 (supply chain artifact hazard)</li>
-<li>H7 (extension boundary)</li>
-<li>H5 (memory corruption)</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>UCA‑E1: accept unverified binaries/plugins</li>
-<li>UCA‑D? accept “trusted” artifacts without verification</li>
-</ul>
-</td>
-<td>
-<ul>
-<li>signing, provenance, secure distribution, verification tooling, reproducible builds
-</li></ul></td></tr><tr>
-<td>(UNK) Unknown</td>
-<td colspan=5>
-keep UNK as a live bucket, but require each UNK item to be “promoted” to a concrete hazard category once understood.
-</td>
-<td>
-</tr>
-</tbody>
-</table>
+Every meaningful hazard should map to at least one of:
 
-## 5) How to use this model in practice (artifacts + workflow)
+- crash-injection or reopen tests
+- malformed-input and fuzz cases
+- concurrency or interleaving tests
+- sanitizer or static-analysis coverage
+- runtime invariants, assertions, telemetry, or validation tooling
 
-### Artifacts (what we produce)
+### Step 6 - Register and tag the result
 
-1. **Subsystem inventory** (per component)
-   - state variables: disk, memory, in-flight
-   - control actions: write/flush/evict/free/parse/load extension
-2. **Control structure diagram** (even a simple box/arrow diagram)
-   - controllers, controlled processes, feedback channels
-3. **Hazard register** (template below)
-4. **UCA list** per control action (mapped to hazards)
-5. **Safety constraints** (“shall” statements) derived from UCAs
-6. **Test matrix**
-   - crash injection points (before/after key actions)
-   - malformed input cases
-   - concurrency interleavings
-7. **Instrumentation plan**
-   - counters/tracepoints for: flush calls, write ordering assumptions, reuse events, parse errors, invariant failures
-8. **Release gate**
-   - every high-severity hazard must have: constraint + test + monitoring signal
+Record the hazard in the register and tag it with one or more SSP categories from Section 6. The output of the workflow should be:
 
-### Workflow (repeat per subsystem)
+- a subsystem hazard list
+- unsafe control actions
+- safety constraints
+- mitigations
+- verification evidence
 
-1. **Define subsystem boundary** (what state you own)
-2. **List control actions** (emit durable bytes, signal durability, manage memory, parse input, execute extensions)
-3. **Enumerate hazards** (unsafe states)
-4. **Enumerate UCAs** using the 4 UCA types
-5. **Derive safety constraints** (testable “shall” statements)
-6. **Design mitigations**
-   - prevention (validation, ordering constraints)
-   - detection (checksums, invariants)
-   - recovery (repair tools, safe-mode)
-   - containment (isolation/sandboxing)
-   - (*optionally cite WAL-like journaling as a mitigation for crash consistency hazards*)
-7. **Create tests**
-   - crash injection + reopen verification
-   - fuzzing + differential behavior tests
-   - concurrency stress tests
-8. **Operationalize**
-   - document expectations (flush/close semantics)
-   - add metrics/logging with privacy review
+## 4) Practical examples
 
-## 6) Compact safety‑threat taxonomy tuned to HDF5 accidents
+### Example 1 - Crash during metadata update
 
-A compact classifier that works well in practice:
+**Scenario:** The library updates a metadata pointer, then crashes before the referenced block is durable.
 
-> **Threat = Trigger × Locus × Propagation × Loss × SSP Category**
+- Trigger: crash, power loss, or `SIGKILL`
+- Unsafe state: durable metadata points to incomplete or stale bytes
+- Loss: file will not open, or opens with silent corruption
+- Common tags: **FMT**, **LIB**, **OPS**
+- Typical controls: ordering constraints, crash-injection tests, stronger validation on reopen, checkpointing or journaling-style mitigation where appropriate
 
-**Trigger (T):** crash/power loss, I/O error, malformed input, memory corruption, concurrency, extension execution, misconfiguration
+### Example 2 - Concurrent access without the right coordination model
 
-**Locus (L):** file format parser, metadata cache, free-space manager, chunk cache, object header/B-tree/heap, VFD/VOL, filter/plugin, OS/filesystem
+**Scenario:** A reader opens a file while a writer is modifying it outside SWMR or another safe coordination mechanism.
 
-**Propagation (P):**
+- Trigger: multi-process or multi-node access with weak locking or misconfiguration
+- Unsafe state: readers observe partially updated structure or stale metadata assumptions
+- Loss: wrong results, open failures, or follow-on corruption if another tool writes back
+- Common tags: **OPS**, **LIB**
+- Typical controls: SWMR where it fits, explicit locking, write-then-rename publication, concurrency integration tests
 
-- **P0:** contained in memory (crash but no disk harm)
-- **P1:** durable but detectable (checksum/invariant catches it)
-- **P2:** durable and silent (worst)
-- **P3:** propagates cross-file/pipeline (cascading)
+### Example 3 - Extension boundary breaks a core invariant
 
-**Loss (S):** unopenable, silent wrong results, lost updates, overwrite, privacy leak, availability/cascade
+**Scenario:** A filter, VOL, or VFD returns data or metadata that violates address, size, or lifecycle expectations.
 
-**SSP Category (C):** `FMT`, `LIB`, `EXT`, `TCD`, `OPS`, `PRV`, `SCD`, `UNK`
+- Trigger: buggy or untrusted extension code
+- Unsafe state: the core library accepts unsafe output as valid state
+- Loss: wrong writes, privacy leakage, crashes, or downstream corruption
+- Common tags: **EXT**, **TCD**, **SCD**
+- Typical controls: allowlists, signed artifacts, invariant validation at the boundary, sandboxing or process isolation for high-risk cases
 
-This makes incident reports and hazard entries comparable and searchable.
+### Example 4 - Metadata and artifacts leak sensitive information
 
-### Hazard register template (copy/paste)
+**Scenario:** Dataset names, attributes, provenance-like metadata, or debug artifacts reveal information that users expected to remain private.
 
-Use this as your canonical register. It’s designed to be “STPA-friendly” (hazard ↔ UCA ↔ constraint ↔ test evidence) and SSP-aligned.
+- Trigger: verbose logging, debug dumps, temporary export files, or overly descriptive metadata conventions
+- Unsafe state: sensitive information is stored or emitted outside the intended boundary
+- Loss: privacy breach and follow-on operational exposure
+- Common tags: **PRV**, **OPS**
+- Typical controls: logging review, redaction guidance, safe defaults for traces and dumps, artifact retention controls
 
-```text
-Hazard Register Entry Template (HDF5 Safety / Accidents)
+## 5) Hazard register template
 
-ID:
-Title:
-Subsystem / Component:
-SSP Category: (FMT | LIB | EXT | TCD | OPS | PRV | SCD | UNK)
-Threat Source: (unintentional | environmental | implementation defect | adversarial | operational)
-Trigger(s):
-Unsafe State (Hazard): (state condition, not an event)
-Accident Chain: Trigger → Unsafe State → Loss
-Loss / Impact: (unopenable | silent corruption | lost updates | overwrite | privacy leak | cascade | other)
-Severity: (Low/Med/High/Critical) + rationale
-Likelihood: (Low/Med/High) + rationale
-Detectability: (Easy/Moderate/Hard) + rationale
+Use this template for entries in the hazard register, including updates to [audit/registry/safety-hazards.md](../audit/registry/safety-hazards.md).
 
-Unsafe Control Actions (UCAs):
-- UCA type: (not provided | provided when unsafe | wrong timing/order | too long/too short)
-- Control action:
-- Context that makes it unsafe:
-
-Safety Constraints (testable “shall” statements):
-- SC-1:
-- SC-2:
-
-Mitigations:
-- Prevention:
-- Detection:
-- Recovery/Containment:
-- Notes (optional): mention WAL-like journaling as mitigation if relevant (not assumed)
-
-Evidence / Verification:
-- Tests (crash injection points, fuzz cases, concurrency tests):
-- Static analysis / sanitizers:
-- Runtime invariants / assertions:
-- Monitoring / telemetry signals:
-
-Owner:
-Status: (Proposed | Accepted | Mitigating | Verified | Deferred)
-Links: (issues, PRs, docs, incident reports)
+```markdown
+## HAZ-###: <short name>
+- Subsystem / component:
+- SSP category tags: <FMT|LIB|EXT|TCD|OPS|PRV|SCD|UNK>
+- Hazard family: <see Section 6>
+- Preconditions:
+- Trigger:
+- Unsafe state:
+- Accident chain: <Trigger -> Unsafe state -> Loss>
+- Loss / impact:
+- Severity:
+- Likelihood:
+- Detectability:
+- Unsafe control actions:
+  - <not provided | provided when unsafe | wrong timing/order | too long/too short>
+- Safety constraints:
+  - SC-1:
+  - SC-2:
+- Mitigations:
+  - Prevention:
+  - Detection:
+  - Recovery / containment:
+- Tests / evidence:
+  - Crash injection:
+  - Malformed-input or fuzz coverage:
+  - Concurrency coverage:
+  - Runtime validation / telemetry:
+- Owner / status / milestone:
+- Links:
 ```
 
-## 7) Checklists (practical, subsystem-applicable)
+## 6) Hazard taxonomy aligned with HDF5 SSP SIG vulnerability categories
 
-### Checklist A — “Open-file hybrid state” review (core safety checklist)
+Use the hazard families below as the safety vocabulary, then tag each finding with SSP categories so safety, security, and privacy work stay comparable across documents and registries.
 
-For any subsystem, answer “yes/no”:
+### Hazard families
 
-- **State accounting**
-  - [Y/N] Do we have a clear list of in-memory state that can diverge from disk?
-  - [Y/N] Do we know which operations make disk state inconsistent if interrupted?
-- **Durability truth**
-  - [Y/N] Which API calls imply durability? Are we sure the implementation + VFD + FS can uphold it?
-  - [Y/N] Do we ever return success while durable state could still be inconsistent?
-- **Ordering constraints**
-  - [Y/N] Do we rely on write ordering implicitly anywhere?
-  - [Y/N] Are there explicit barriers/flushes when order matters?
-- **Invariant gates**
-  - [Y/N] Do we validate addresses/lengths/types before writing durable bytes?
-  - [Y/N] Do we fail safe on invariant failure (stop writing / return error)?
-- **Recovery expectations**
-  - [Y/N] After a crash, can a user/tool distinguish “possibly inconsistent” vs “known consistent”?
-  - If not, do we at least fail closed (refuse to write further)?
+| Hazard ID | Hazard family | Description |
+| --- | --- | --- |
+| **H1** | On-disk metadata inconsistency | Durable metadata is not self-consistent: pointers, sizes, graphs, references, or checks do not line up. |
+| **H2** | Hybrid divergence | In-memory state and on-disk state disagree, and the system lacks a safe way to reconcile them. |
+| **H3** | Unsafe durability signaling | `flush`, `close`, or workflow-level "done" signals overstate what is safely durable. |
+| **H4** | Free-space aliasing or reuse | A freed region is reused while stale references or repair paths can still make the old mapping relevant. |
+| **H5** | In-memory structural corruption | Internal tables, caches, lists, or indices drift into a state that causes wrong reads, writes, or frees. |
+| **H6** | Parser ambiguity | Weak validation or underspecified interpretation allows malformed or divergent parses. |
+| **H7** | Extension boundary violation | A filter, VOL, VFD, wrapper, or plugin violates assumptions that the core library depends on. |
+| **H8** | Operational, privacy, or supply-chain exposure | Misconfiguration, artifact leakage, unsafe deployment, or compromised distribution introduces a safety-relevant hazard. |
 
-### Checklist B — Crash consistency & partial persistence
+### Alignment table
 
-- Have we identified **crash injection points** around:
-  - [Y/N] metadata update
-  - [Y/N] free-space update/reuse
-  - [Y/N] index update (B-tree/heap)
-  - [Y/N] flush/close boundary
-- For each crash point, do we know the expected post-crash outcome?
-  - [Y/N] openable?
-  - [Y/N] last-durable prefix semantics?
-  - [Y/N] detectable inconsistency?
-- Do we have a “safe-mode open” behavior (read-only open, or strict validation) for suspicious files?
-- **Optional mitigation note:** would WAL-like journaling, copy-on-write, or atomic checkpointing reduce the number of crash points that can yield durable inconsistency?
+| SSP category | What it looks like in a safety review | Hazard families most often involved |
+| --- | --- | --- |
+| **FMT** | malformed or partially persisted file structures, dangling references, ambiguous parsing, weak integrity checks | H1, H2, H6 |
+| **LIB** | memory safety faults, cache or free-space logic errors, wrong durability semantics, unsafe internal defaults | H2, H3, H4, H5 |
+| **EXT** | filters, VOLs, VFDs, or wrappers producing invalid state or loading unsafe code paths | H7, H8 |
+| **TCD** | dependency flaws, wrapper behavior drift, unpinned toolchains, build-time semantic changes | H5, H7, H8 |
+| **OPS** | unsafe sharing modes, weak locking, durability misunderstandings, bad deployment assumptions | H2, H3, H8 |
+| **PRV** | metadata leakage, unsafe logging, retained debug artifacts, traceability surprises | H8 |
+| **SCD** | unsigned or compromised binaries, plugin path hijacking, unsafe distribution channels | H7, H8 |
+| **UNK** | newly discovered or not-yet-classified hazard chains | any |
 
-### Checklist C — File format parsing & ambiguity
+## 7) Checklists for reviewers
 
-- Do parsers reject malformed structures early and consistently?
-- Are there ambiguous interpretations that differ across versions/tools?
-- Are there size/offset calculations protected against overflow/underflow?
-- Do we have differential tests (same file across versions/build options) to detect divergence?
-- Do we fuzz:
-  - [Y/N] superblock/object headers/messages
-  - [Y/N] heap/B-tree structures
-  - [Y/N] filters/encoded metadata messages?
+### When a change touches write ordering, flush, or close
 
-### Checklist D — Extensions (filters/VOL/VFD/plugins)
+- [ ] Does the change alter what users will infer from `flush`, `close`, or success return codes?
+- [ ] Are ordering assumptions explicit, or are they still relying on filesystem or storage behavior?
+- [ ] Are crash-injection tests added around metadata updates, free-space updates, and reopen behavior?
+- [ ] If failure occurs mid-operation, does the code fail safe instead of continuing with ambiguous state?
 
-- Do we have a **trust policy** for what code can be loaded?
-- Is the plugin search path controllable, and can it be hijacked?
-- Do we validate extension outputs against invariants before accepting them?
-- Can extensions exfiltrate sensitive metadata through side channels or logs?
-- Do we have a containment option (process isolation / sandboxing) for high-risk extensions?
+### When a change touches parsing or on-disk structures
 
-### Checklist E — Privacy & artifacts
+- [ ] Are sizes, offsets, counts, and references validated before use?
+- [ ] Are malformed structures rejected consistently and early?
+- [ ] Are there negative tests or fuzz seeds for the new path?
+- [ ] Could the same file now be interpreted differently across versions, build modes, or wrappers?
 
-- What metadata fields might contain sensitive information (names, attributes, provenance-like structure)?
-- Are logs safe by default (no sensitive dumps)?
-- Are temporary artifacts (core dumps, debug traces, exported metadata) controlled?
-- Do we provide guidance or tooling for redaction/anonymization?
+### When a change touches concurrency or file sharing
+
+- [ ] Is the intended access model clear: single writer, SWMR, Parallel HDF5, or external coordination?
+- [ ] Are locking assumptions documented and tested on the target filesystems?
+- [ ] Could a reader or another writer observe partially updated state?
+- [ ] Are restart and recovery behaviors tested after interruption?
+
+### When a change touches extensions or plugin loading
+
+- [ ] Is the trust model for the extension path documented?
+- [ ] Are extension outputs validated against core invariants?
+- [ ] Can the plugin search path or loader behavior be hijacked?
+- [ ] Is there a containment option for high-risk extensions?
+
+### When a change touches metadata, logging, or artifacts
+
+- [ ] Could names, attributes, provenance, debug traces, or temporary files expose sensitive information?
+- [ ] Are logs safe by default for production use?
+- [ ] Are redaction, retention, and cleanup expectations documented?
+- [ ] Does added telemetry avoid creating a new privacy or operational hazard?
