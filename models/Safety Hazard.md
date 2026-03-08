@@ -1,6 +1,6 @@
 # HDF5 Safety Hazard Model
 
-This document defines a practical hazard model for HDF5. It is meant to expose accident chains, turn them into concrete constraints and tests, and keep safety work aligned with the HDF5 SSP SIG vulnerability taxonomy used across the repository.
+This document defines a practical hazard model for the HDF5 library and file format. It is meant to expose accident chains, turn them into concrete constraints and tests, and keep safety work aligned with the HDF5 SSP SIG vulnerability taxonomy used across the repository.
 
 ## Contents
 
@@ -12,9 +12,9 @@ This document defines a practical hazard model for HDF5. It is meant to expose a
 - [6) Hazard taxonomy aligned with HDF5 SSP SIG vulnerability categories](#6-hazard-taxonomy-aligned-with-hdf5-ssp-sig-vulnerability-categories)
 - [7) Checklists for reviewers](#7-checklists-for-reviewers)
 
-## 1) Scope and security goals
+## 1) Scope and safety goals
 
-The requested outline uses "security goals." In this safety model, that means the safety and security-relevant properties that keep HDF5 files, tools, and workflows out of unsafe states.
+Our primary goal is to keep HDF5 files, tools, and workflows out of unsafe states.
 
 ### In scope
 
@@ -38,7 +38,7 @@ The requested outline uses "security goals." In this safety model, that means th
 4. Extensions run inside the process boundary unless explicitly isolated.
 5. Parallel I/O, threads, and distributed workflows increase timing and ordering hazards.
 
-### Primary goals
+### Primary safety goals (what we protect)
 
 - **File integrity:** the file remains parseable and internally consistent at defined safe points.
 - **Data correctness:** reads return the data that was actually committed, or a clearly documented durable prefix.
@@ -47,9 +47,9 @@ The requested outline uses "security goals." In this safety model, that means th
 - **In-memory safety:** internal structures should not drift into states that cause wrong writes, wrong frees, or silent corruption.
 - **Privacy protection:** metadata, logs, temporary artifacts, and extension behavior should not leak sensitive information.
 
-## 2) HDF5 Control System (H5CS) model in one page
+## 2) HDF5 Control System (H5CS) model
 
-An open HDF5 file behaves like a control system. Controllers issue actions that change a hybrid state spread across disk, memory, and in-flight I/O. Hazards arise when those actions happen in the wrong context, in the wrong order, or without enough validation.
+An open HDF5 file behaves like a control system. Controllers issue actions that change a hybrid state spread across disk, memory, and in-flight I/O. Hazards arise when those actions are disrupted, happen in the wrong context, in the wrong order, or without enough validation.
 
 ```mermaid
 flowchart LR
@@ -120,7 +120,7 @@ Describe hazards as state conditions, not events. Good hazard statements look li
 
 ### Step 3 - Enumerate unsafe control actions
 
-For each control action, ask the four standard STPA-style questions:
+For each control action, ask the four standard Systems-Theoretic Process Analysis (STPA)-style questions:
 
 1. Was the action not provided when needed?
 2. Was it provided when it was unsafe?
@@ -210,7 +210,7 @@ Record the hazard in the register and tag it with one or more SSP categories fro
 
 ## 5) Hazard register template
 
-Use this template for entries in the hazard register, including updates to [audit/registry/safety-hazards.md](../audit/registry/safety-hazards.md).
+Use this template for entries in the hazard register, including updates to [audit/registry/safety-hazards](../audit/registry/safety-hazards).
 
 ```markdown
 ## HAZ-###: <short name>
@@ -262,16 +262,16 @@ Use the hazard families below as the safety vocabulary, then tag each finding wi
 
 ### Alignment table
 
-| SSP category | What it looks like in a safety review | Hazard families most often involved |
+| Vulnerability category | What it looks like in a safety review | Hazard families most often involved |
 | --- | --- | --- |
-| **FMT** | malformed or partially persisted file structures, dangling references, ambiguous parsing, weak integrity checks | H1, H2, H6 |
-| **LIB** | memory safety faults, cache or free-space logic errors, wrong durability semantics, unsafe internal defaults | H2, H3, H4, H5 |
-| **EXT** | filters, VOLs, VFDs, or wrappers producing invalid state or loading unsafe code paths | H7, H8 |
-| **TCD** | dependency flaws, wrapper behavior drift, unpinned toolchains, build-time semantic changes | H5, H7, H8 |
-| **OPS** | unsafe sharing modes, weak locking, durability misunderstandings, bad deployment assumptions | H2, H3, H8 |
-| **PRV** | metadata leakage, unsafe logging, retained debug artifacts, traceability surprises | H8 |
-| **SCD** | unsigned or compromised binaries, plugin path hijacking, unsafe distribution channels | H7, H8 |
-| **UNK** | newly discovered or not-yet-classified hazard chains | any |
+| **FMT** (File format) | malformed or partially persisted file structures, dangling references, ambiguous parsing, weak integrity checks | H1, H2, H6 |
+| **LIB** (Core Library) | memory safety faults, cache or free-space logic errors, wrong durability semantics, unsafe internal defaults | H2, H3, H4, H5 |
+| **EXT** (Extensions/plugins) | filters, VOLs, VFDs, or wrappers producing invalid state or loading unsafe code paths | H7, H8 |
+| **TCD** (Toolchain/deps) | dependency flaws, wrapper behavior drift, unpinned toolchains, build-time semantic changes | H5, H7, H8 |
+| **OPS** (Operational/usage) | unsafe sharing modes, weak locking, durability misunderstandings, bad deployment assumptions | H2, H3, H8 |
+| **PRV** (Privacy-specific) | metadata leakage, unsafe logging, retained debug artifacts, traceability surprises | H8 |
+| **SCD** (Supply Chain/dist.) | unsigned or compromised binaries, plugin path hijacking, unsafe distribution channels | H7, H8 |
+| **UNK** (Unknown) | newly discovered or not-yet-classified hazard chains | any |
 
 ## 7) Checklists for reviewers
 
