@@ -2,8 +2,7 @@
 
 Risk scoring used: **Severity (1-5) x Likelihood (1-5) = Risk (1-25)**
 
-Risk bands: **1-5 Low, 6-10 Moderate, 11-15 High, 16-20 Very High, 21-25
-Critical**
+Risk bands: **1-5 Low, 6-10 Moderate, 11-15 High, 16-20 Very High, 21-25 Critical**
 
 See also: [HDF5 Registry Asset Register](./asset-register.md)
 

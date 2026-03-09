@@ -1,13 +1,13 @@
 # HDF5 Security Threat Model
 
-This document defines a *security* threat model for the HDF5 ecosystem using the **CASSE** approach (“Core library, Application, Storage, System, External libraries”). CASSE was introduced specifically for data management libraries (DML).
+This document defines a *security* threat model for the HDF5 library and file format using the **CASSE** approach (“Core library, Application, Storage, System, External libraries”). CASSE was introduced specifically for data management libraries (DML) to overcome the limitations of traditional threat models such as STRIDE.
 
 **Reference:** [https://dl.acm.org/doi/full/10.1145/3731599.3767556](https://dl.acm.org/doi/full/10.1145/3731599.3767556)
 
 ## Contents
 
 - [1) Scope and security goals](#1-scope-and-security-goals)
-- [2) CASSE in one page](#2-casse-in-one-page)
+- [2) CASSE model](#2-casse-model)
 - [3) Threat enumeration workflow](#3-threat-enumeration-workflow)
 - [4) Practical examples](#4-practical-examples)
 - [5) Attack register template](#5-attack-register-template)
@@ -32,7 +32,11 @@ This document defines a *security* threat model for the HDF5 ecosystem using the
 - **Execution safety**: parsing untrusted inputs must not lead to arbitrary code execution
 - **Supply chain integrity**: users can verify what code they are running
 
-## 2) CASSE in one page
+## 2) CASSE model
+
+For security work, the most useful unit is the attack chain:
+
+> **Source -> Method -> Target**
 
 CASSE classifies attacks by combining:
 
@@ -53,7 +57,7 @@ flowchart LR
   subgraph H["HDF5"]
     direction TB
     H_app["Application"]
-    H_ext["External Interface"]
+    H_ext["External Interface<br/>(e.g., H5py)"]
     H_api["HDF5 Public API"]
     H_vol["VOL Connector"]
     H_core["Core HDF5 Library"]
@@ -104,7 +108,7 @@ flowchart LR
 
 ### Abstract data model
 
-This model captures how HDF5 objects relate (groups, datasets, attributes, datatypes, etc.) and where critical pointers/offsets/sizes are that attackers might target.
+This model captures how HDF5 objects relate (groups, datasets, attributes, datatypes, etc.), data shape, element types and layout.
 
 ```mermaid
 flowchart TB
@@ -135,7 +139,7 @@ flowchart TB
 
 ### Concrete/on-disk model
 
-This model captures key on-disk structures and pointers/offsets that parsers traverse. For HDF5, this includes the superblock, object headers, B-trees, message lists, references, external links, etc.
+This model captures key on-disk structures and pointers/offsets that parsers traverse and where critical pointers/offsets/sizes are that attackers might target. For HDF5, this includes the superblock, object headers, B-trees, message lists, references, external links, etc.
 
 ```mermaid
 flowchart TB
@@ -208,7 +212,7 @@ The HDF5 SSP SIG uses categories spanning the stack (FMT, LIB, EXT, TCD, OPS, PR
 
 ### Step 6 — Turn threats into mitigations + tests
 
-Threat modeling is only “done” when you create:
+Threat modeling is only “done” when we create:
 
 - mitigations (code changes, defaults, policies, docs)
 - regression tests (fuzz seeds, negative tests, signature checks)
@@ -298,7 +302,7 @@ Threat modeling is only “done” when you create:
 
 Use this table to tag each threat (many threats span multiple categories):
 
-| Vulnerability category | What to look for (security lens) | CASSE targets most often affected |
+| Vulnerability category | What to look for in a security review | CASSE targets most often affected |
 | --- | --- | --- |
 | **FMT** (File format) | ambiguous specs, crafted structures, pointer/offset abuse, malformed metadata | Core library, Storage |
 | **LIB** (Core library) | memory safety bugs, UB, race conditions, insecure defaults, parsing hot paths | Core library, System |
