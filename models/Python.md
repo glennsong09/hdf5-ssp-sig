@@ -14,9 +14,9 @@ It builds on the core models in [Safety Hazard.md](./Safety%20Hazard.md), [Secur
 - [6) Threat taxonomy aligned with HDF5 SSP SIG vulnerability categories](#6-threat-taxonomy-aligned-with-hdf5-ssp-sig-vulnerability-categories)
 - [7) Checklists for reviewers](#7-checklists-for-reviewers)
 
-## 1) Scope and security goals
+## 1) Scope and SSP goals
 
-The shared outline uses "security goals." In this wrapper model, that means the combined safety, security, and privacy properties that must hold when Python code drives native HDF5 parsing, storage, plugins, and object serialization paths.
+The purpose of this model is to help in analyzing the combined safety, security, and privacy properties that must hold when Python code drives native HDF5 parsing, storage, plugins, and object serialization paths. The model is designed to help reviewers identify and mitigate risks that arise from the Python-to-native transition, wrapper convenience features, and deployment patterns.
 
 ### In scope
 
@@ -260,16 +260,16 @@ Use the wrapper issue families below as the Python-specific vocabulary. They are
 
 ### Alignment table
 
-| SSP category | What it looks like in a Python wrapper review | Wrapper families most often involved |
+| Vulnerability category | What it looks like in a Python wrapper review | Wrapper families most often involved |
 | --- | --- | --- |
-| **FMT** | malformed file structures and parser hot paths are reachable through ordinary wrapper APIs | W1, W5 |
-| **LIB** | native extension faults, unsafe object handling, lifecycle bugs, wrapper defaults, deserialization paths | W1, W2, W4, W6, W8 |
-| **EXT** | filters, VFDs, VOLs, or wrapper plugins extend the trusted computing base at runtime | W3, W8 |
-| **TCD** | wheels, native dependencies, converters, wrappers, and CI tooling change behavior or introduce artifacts | W6, W7 |
-| **OPS** | user workflows treat files as safe, allow unsafe sharing, or run high-risk parsing without containment | W4, W5, W7, W8 |
-| **PRV** | metadata, object storage, logs, temp files, and artifact retention expose sensitive information | W2, W7 |
-| **SCD** | package compromise, plugin substitution, mutable build inputs, or unverified binaries | W3, W6 |
-| **UNK** | new wrapper-specific chains that do not fit the known families yet | any |
+| **FMT** (File format) | malformed file structures and parser hot paths are reachable through ordinary wrapper APIs | W1, W5 |
+| **LIB** (Core library) | native extension faults, unsafe object handling, lifecycle bugs, wrapper defaults, deserialization paths | W1, W2, W4, W6, W8 |
+| **EXT** (Extensions/plugins) | filters, VFDs, VOLs, or wrapper plugins extend the trusted computing base at runtime | W3, W8 |
+| **TCD** (Toolchain/deps) | wheels, native dependencies, converters, wrappers, and CI tooling change behavior or introduce artifacts | W6, W7 |
+| **OPS** (Operational/usage) | user workflows treat files as safe, allow unsafe sharing, or run high-risk parsing without containment | W4, W5, W7, W8 |
+| **PRV** (Privacy-specific) | metadata, object storage, logs, temp files, and artifact retention expose sensitive information | W2, W7 |
+| **SCD** (Supply Chain/dist.) | package compromise, plugin substitution, mutable build inputs, or unverified binaries | W3, W6 |
+| **UNK** (Unknown) | new wrapper-specific chains that do not fit the known families yet | any |
 
 ## 7) Checklists for reviewers
 
