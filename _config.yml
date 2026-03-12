@@ -1,0 +1,53 @@
+title: HDF5 Security
+description: Security policies and vulnerability disclosure for the HDF5 ecosystem
+
+remote_theme: just-the-docs/just-the-docs
+
+url: ""
+baseurl: ""
+
+# Colors - HDF5 brand colors
+color_scheme: hdf5
+
+# Logo
+logo: "/assets/images/hdf5-logo.svg"
+
+# Navigation
+nav_enabled: true
+heading_anchors: true
+
+# Search
+search_enabled: true
+search:
+  heading_level: 2
+  previews: 3
+
+# Footer
+footer_content: "Copyright &copy; The HDF Group. Distributed under the <a href=\"https://github.com/HDFGroup/hdf5/blob/develop/LICENSE\">BSD License</a>."
+
+# Back to top link
+back_to_top: true
+back_to_top_text: "Back to top"
+
+# Aux links (top right)
+aux_links:
+  "HDF5 on GitHub":
+    - "https://github.com/HDFGroup/hdf5"
+  "Report a Vulnerability":
+    - "https://github.com/HDFGroup/hdf5/security/advisories/new"
+
+aux_links_new_tab: true
+
+# Plugins
+plugins:
+  - jekyll-remote-theme
+  - jekyll-redirect-from
+
+# Exclude from processing
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor
+  - .git
+  - tests
