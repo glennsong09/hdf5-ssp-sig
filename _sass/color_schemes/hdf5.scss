@@ -1,0 +1,34 @@
+// HDF5 Brand Color Scheme for just-the-docs
+
+// Primary brand color - HDF5 Blue
+$link-color: #046bd2;
+$btn-primary-color: #046bd2;
+
+// Sidebar/Navigation
+$sidebar-color: #1e293b;
+$nav-child-link-color: #334155;
+
+// Text colors
+$body-text-color: #334155;
+$body-heading-color: #1e293b;
+
+// Background
+$body-background-color: #ffffff;
+$sidebar-bg-color: #f8fafc;
+$search-background-color: #f1f5f9;
+
+// Code blocks
+$code-background-color: #f1f5f9;
+
+// Borders
+$border-color: #D1D5DB;
+
+// Table styling
+$table-background-color: #ffffff;
+$base-button-color: #046bd2;
+
+// Search
+$search-result-preview-color: #334155;
+
+// Feedback/callouts - adjusted for HDF5 style
+$feedback-color: scale-color($link-color, $saturation: -20%, $lightness: 80%);
